@@ -1,5 +1,6 @@
-# Texto do livro baixado pelo scripts/baixar_aosa.py; não é versionado
+# Texto do livro baixado pelo scripts/baixar_aosa.py e o gerado a partir dele; não é versionado
 data/raw/
+data/texto/
 
 HELP.md
 target/
