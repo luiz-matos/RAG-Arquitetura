@@ -67,7 +67,22 @@ O Maven vem pelo wrapper. Se o JDK 25 não for o padrão da máquina, aponte o `
 ./mvnw verify
 ```
 
-No Windows, use `mvnw.cmd`. O `verify` compila, confere a formatação do código e roda os testes, e o `./mvnw spotless:apply` corrige a formatação.
+No Windows, use `mvnw.cmd`. O `verify` compila, confere a formatação do código e roda os testes, sem Docker, e o `./mvnw spotless:apply` corrige a formatação.
+
+A ingestão lê o livro, gera os vetores e grava os trechos no banco, e a aplicação termina quando ela acaba. Cada execução refaz o índice do zero:
+
+```bash
+./mvnw spring-boot:run -Dspring-boot.run.arguments=--rag.ingestao.executar=true
+```
+
+Pela IDE, rode a `RagArquiteturaApplication` com o argumento `--rag.ingestao.executar=true`. A configuração vem de variáveis de ambiente, com padrão para o `docker-compose.yml`:
+
+| Variável | Padrão |
+|---|---|
+| `DB_URL` | `jdbc:postgresql://localhost:5433/rag` |
+| `DB_USERNAME` | `rag` |
+| `DB_PASSWORD` | `rag` |
+| `OLLAMA_URL` | `http://localhost:11434` |
 
 Para ver o resultado da ingestão até onde ela está pronta, rode a classe `InspecionarIngestao` pela IDE, com a raiz do projeto como pasta de trabalho. Ela mostra um resumo no console e grava o texto limpo de cada página em `data/texto/` e os trechos em `data/trechos/`, sem mexer no banco. Com o Ollama no ar, também vetoriza o capítulo do Asterisk e faz uma busca em memória com duas perguntas de exemplo.
 
@@ -130,9 +145,12 @@ data/texto/, data/trechos/ # gerados pelo InspecionarIngestao para conferência,
 docker-compose.yml         # PostgreSQL + pgvector, Ollama e o download dos modelos
 src/main/java/br/com/luizmatosdev/ragarquitetura/
 ├── RagArquiteturaApplication   # ponto de entrada do Spring Boot
+├── config/RagConfig            # liga o modelo de embedding ao Ollama e os trechos ao PostgreSQL
 ├── ingestao/
 │   ├── LeitorLivro             # HTML do livro para texto limpo, com livro, capítulo, autor e URL
-│   └── CortadorDeTrechos       # texto em trechos de até 1.200 caracteres
+│   ├── CortadorDeTrechos       # texto em trechos de até 1.200 caracteres
+│   ├── IngestaoDoLivro         # o fluxo inteiro: ler, cortar, vetorizar e gravar
+│   └── ExecutorDaIngestao      # roda a ingestão ao subir, com rag.ingestao.executar=true
 ├── vetor/
 │   └── GeradorDeVetores        # trechos e pergunta em vetores de 768 números, pelo Ollama
 └── inspecao/
@@ -143,7 +161,16 @@ src/main/java/br/com/luizmatosdev/ragarquitetura/
 - **Download separado da ingestão.** O `baixar_aosa.py` só baixa o HTML, sem limpar nem cortar. O processamento fica na ingestão em Java, e mudar a forma de cortar o texto não exige baixar tudo de novo. O `manifesto.json` registra de onde veio cada página, para a resposta citar a fonte.
 - **Texto limpo com a fonte junto.** O `LeitorLivro` transforma cada página num `Document` do LangChain4j: o texto sem a moldura do site (título, propaganda, números das notas) e os metadados que identificam de onde ele veio. Os blocos ficam separados por linha em branco, e o código dos exemplos mantém as quebras de linha. No livro inteiro são 87 páginas e 3,6 milhões de caracteres.
 - **Trechos que respeitam o texto.** O `CortadorDeTrechos` usa o divisor recursivo do LangChain4j: tenta cortar entre parágrafos, depois entre linhas, frases e palavras, e só parte um parágrafo quando ele sozinho passa do tamanho máximo. Cada trecho herda os metadados da página e ganha o `index`, a posição dele na página. O livro vira 3.982 trechos, com 941 caracteres em média.
-- **Vetores pelo Ollama.** O `GeradorDeVetores` recebe um `EmbeddingModel`, a interface do LangChain4j, e não sabe que do outro lado está o Ollama: nos testes, um modelo falso entra no lugar. Os trechos vão em lotes de 32 por chamada, e cada trecho vira um vetor de 768 números. Na CPU, são uns 3,6 trechos por segundo, então o livro inteiro leva perto de 19 minutos.
+- **Vetores pelo Ollama.** O `GeradorDeVetores` recebe um `EmbeddingModel`, a interface do LangChain4j, e não sabe que do outro lado está o Ollama: nos testes, um modelo falso entra no lugar. Os trechos vão em lotes de 32 por chamada, e cada trecho vira um vetor de 768 números. Na CPU, são uns 4,4 trechos por segundo: o livro inteiro levou 15 minutos.
+- **Trechos no PostgreSQL.** O `IngestaoDoLivro` junta as peças e grava pelo `PgVectorEmbeddingStore` do LangChain4j, que cria a tabela `trecho` sozinho. Com o livro inteiro, são 3.982 linhas e 21 MB:
+
+| Coluna | Tipo | Conteúdo |
+|---|---|---|
+| `embedding_id` | `uuid` | Identificador do trecho |
+| `embedding` | `vector(768)` | O vetor |
+| `text` | `text` | O texto do trecho |
+| `metadata` | `jsonb` | Livro, capítulo, autor, arquivo, URL, posição na página e o modelo que gerou o vetor |
+
 - **Três modelos, três papéis.** O `nomic-embed-text` transforma texto em vetor de 768 números para a busca. O reranking dá uma nota de relevância a cada trecho encontrado. O `qwen3:4b-instruct` traduz a pergunta e escreve a resposta.
 
 ## 🧠 Decisões técnicas
@@ -192,6 +219,26 @@ O `nomic-embed-text` foi treinado com um prefixo que indica o papel do texto: `s
 
 Mandar os 3.982 trechos numa chamada só passaria do tempo limite e não mostraria progresso; mandar um por chamada multiplicaria o custo de ida e volta ao Ollama. Com lotes de 32, cada chamada leva poucos segundos na CPU, e o log mostra quantos já foram.
 
+**`PgVectorEmbeddingStore` em vez de tabela própria**
+
+O store do LangChain4j cria a tabela, grava e busca, e já traz a busca híbrida da etapa 3 (vetor mais a busca de texto do PostgreSQL). Com uma tabela própria, criada por migração, eu controlaria cada coluna e cada SQL, mas teria que escrever a busca híbrida na mão. O custo da escolha é que o formato da tabela é do LangChain4j: a coluna se chama `text`, e os metadados ficam num JSON só.
+
+**Metadados em JSONB**
+
+O padrão do store é guardar os metadados como `JSON`. Troquei por `JSONB`, que o PostgreSQL consegue indexar, para filtrar por livro ou capítulo sem ler o texto de cada linha.
+
+**Busca exata, sem índice de vetor**
+
+O pgvector tem índices que aceleram a busca comparando só parte dos vetores (IVFFlat, HNSW), em troca de às vezes deixar o mais próximo de fora. Com 3.982 trechos, comparar a pergunta com todos é rápido, e a busca exata não mistura o erro do índice com o resultado das etapas.
+
+**Índice refeito do zero a cada ingestão**
+
+Cada execução apaga a tabela e grava tudo de novo, para cada etapa da pesquisa medir um índice inteiro feito do mesmo jeito. A tabela só é apagada depois que os vetores novos estão prontos: se a vetorização falhar no meio dos 15 minutos, o banco continua com a versão anterior. O custo é refazer os 15 minutos mesmo quando só uma página muda.
+
+**Ingestão como execução da aplicação, não como endpoint**
+
+A ingestão roda quando a aplicação sobe com `rag.ingestao.executar=true`, e a aplicação termina no fim. É um processo de 15 minutos que roda raramente, e não faz sentido deixá-lo atrás de uma rota HTTP. O store do banco é `@Lazy`: sem a ingestão ligada, a aplicação sobe sem conectar no PostgreSQL, e os testes rodam sem Docker.
+
 **Reranking com um modelo pequeno dentro do Java**
 
 Reordenar os trechos com o próprio LLM exigiria uma chamada por trecho, inviável sem GPU. O reranking usa um modelo pequeno feito para isso (ms-marco-MiniLM), executado dentro da aplicação pelo LangChain4j.
@@ -214,8 +261,8 @@ O download dos modelos caiu várias vezes no meio. O serviço `ollama-modelos` t
 | Leitura do livro (HTML para texto limpo) | ✅ Pronto, com testes |
 | Corte em trechos (etapa 1: tamanho fixo) | ✅ Pronto, com testes |
 | Geração dos vetores | ✅ Pronto, com testes |
-| Gravação no banco | 🔨 Próxima |
-| Busca | ⏳ |
+| Gravação no banco | ✅ Pronto, com testes |
+| Busca | 🔨 Próxima |
 | Resposta | ⏳ |
 | Lista completa de perguntas da avaliação | ⏳ |
 

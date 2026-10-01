@@ -4,16 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.model.embedding.EmbeddingModel;
-import dev.langchain4j.model.output.Response;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class GeradorDeVetoresTest {
 
-    private final ModeloFalso modelo = new ModeloFalso();
+    private final ModeloDeEmbeddingFalso modelo = new ModeloDeEmbeddingFalso();
     private final GeradorDeVetores gerador = new GeradorDeVetores(modelo);
 
     @Test
@@ -21,8 +18,8 @@ class GeradorDeVetoresTest {
         List<Embedding> vetores = gerador.vetorizarTrechos(trechos(70));
 
         assertThat(vetores).hasSize(70);
-        assertThat(vetores.get(0).vector()[0]).isEqualTo(0f);
-        assertThat(vetores.get(69).vector()[0]).isEqualTo(69f);
+        assertThat(vetores.get(0).vector()[1]).isEqualTo(0f);
+        assertThat(vetores.get(69).vector()[1]).isEqualTo(69f);
     }
 
     @Test
@@ -51,20 +48,5 @@ class GeradorDeVetoresTest {
         return IntStream.range(0, quantidade)
                 .mapToObj(i -> TextSegment.from("trecho " + i))
                 .toList();
-    }
-
-    // Guarda o que recebeu e devolve um vetor com a posição do texto, para conferir a ordem
-    private static class ModeloFalso implements EmbeddingModel {
-
-        private final List<List<TextSegment>> chamadas = new ArrayList<>();
-        private int contador = 0;
-
-        @Override
-        public Response<List<Embedding>> embedAll(List<TextSegment> textos) {
-            chamadas.add(textos);
-            return Response.from(textos.stream()
-                    .map(t -> Embedding.from(new float[] {contador++}))
-                    .toList());
-        }
     }
 }
