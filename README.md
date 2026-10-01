@@ -14,7 +14,7 @@
 
 > 🎯 **RAG em Java 25, Spring Boot 4 e LangChain4j que responde em português perguntas sobre arquitetura de software**, com os livros da série *The Architecture of Open Source Applications* como fonte, PostgreSQL + pgvector como banco e os modelos rodando na própria máquina pelo Ollama.
 
-Comecei o projeto em 2026 para entender como um RAG funciona por dentro, uma peça de cada vez, e para escrever um artigo medindo quanto cada técnica melhora a resposta. Está em construção: o livro, o banco e os modelos estão prontos e testados, e o RAG em si é a próxima parte.
+Comecei o projeto em 2026 para entender como um RAG funciona por dentro, uma peça de cada vez, e para escrever um artigo medindo quanto cada técnica melhora a resposta. A versão base, a etapa 1 da pesquisa, já responde: o livro está no banco, a busca acha os trechos e o modelo responde em português citando as fontes. As próximas etapas são as técnicas que a pesquisa vai medir.
 
 ```mermaid
 flowchart LR
@@ -97,9 +97,29 @@ Para ver o resultado da ingestão até onde ela está pronta, rode a classe `Ins
 
 | Método | Rota | O que faz |
 |---|---|---|
-| `GET` | `/api/busca?pergunta=...` | Devolve os 5 trechos do livro mais próximos da pergunta, com a fonte de cada um |
+| `GET` | `/api/resposta?pergunta=...` | Responde em português com base nos trechos do livro, citando as fontes |
+| `GET` | `/api/busca?pergunta=...` | Devolve os 5 trechos do livro mais próximos da pergunta, com a fonte de cada um, sem chamar o modelo |
 
-A busca mostra o que o modelo vai receber antes de existir a resposta. Pergunta vazia ou ausente volta com 400.
+Pergunta vazia ou ausente volta com 400 nas duas rotas. Na CPU, a resposta leva de 30 segundos a pouco mais de 1 minuto; a busca, menos de 0,1 segundo.
+
+```bash
+curl -G http://localhost:8080/api/resposta --data-urlencode "pergunta=What is a channel in Asterisk?"
+```
+
+```json
+{
+  "pergunta": "What is a channel in Asterisk?",
+  "resposta": "Em Asterisk, um canal (channel) representa uma conexão entre o sistema Asterisk e um ponto final de telefonia (Figure 1.1). O exemplo mais comum é quando um telefone faz uma ligação para o sistema Asterisk. Essa conexão é representada por um único canal. No código de Asterisk, um canal existe como uma instância da estrutura de dados ast_channel [5].",
+  "fontes": [
+    {"nota": 0.907, "livro": "The Architecture of Open Source Applications, Volume 1", "capitulo": "Asterisk", "autor": "Russell Bryant", "url": "https://aosabook.org/en/v1/asterisk.html", "posicao": 23, "texto": "..."},
+    {"nota": 0.888, "livro": "The Architecture of Open Source Applications, Volume 1", "capitulo": "Asterisk", "autor": "Russell Bryant", "url": "https://aosabook.org/en/v1/asterisk.html", "posicao": 1, "texto": "..."}
+  ]
+}
+```
+
+O número entre colchetes na resposta é a posição do trecho em `fontes`: o `[5]` acima é o quinto, a definição de channel. O exemplo mostra só 2 das 5 fontes.
+
+A `/api/busca` mostra o que o modelo recebe, sem esperar a resposta:
 
 ```bash
 curl -G http://localhost:8080/api/busca --data-urlencode "pergunta=How does nginx handle many connections at the same time?"
@@ -168,6 +188,18 @@ Com o livro inteiro no banco, pela `/api/busca` (aqui a nota já é a do LangCha
 | How does HDFS avoid losing data when a disk fails? | 0,875, HDFS, trecho 22 | Sim |
 | O que é um channel no Asterisk? | 0,851, Asterisk, trecho 3 | Sim, e a definição entrou em 3º |
 
+E as respostas do RAG completo, pela `/api/resposta`, com uma quinta pergunta sobre algo que não está nos livros:
+
+| Pergunta | Tempo | Resposta |
+|---|---|---|
+| What is a channel in Asterisk? | 46 s | Em português, com a definição e citando o trecho dela |
+| How does nginx handle many connections at the same time? | 71 s | Em português: workers, eventos, run-loop |
+| How does HDFS avoid losing data when a disk fails? | 69 s | Em português: réplicas, checksums e block scanner |
+| O que é um channel no Asterisk? | 47 s | Em português, com a definição e citando o trecho dela |
+| How does Kubernetes schedule pods? | 32 s | "Não encontrei isso nos livros." |
+
+Conferi no banco duas afirmações que pareciam conhecimento do próprio modelo: as 3 réplicas por padrão do HDFS e a comparação do nginx com o Apache. As duas estão nos trechos enviados. Na primeira versão do prompt, duas das três perguntas em inglês voltaram em inglês: o que resolveu está em [Decisões técnicas](#-decisões-técnicas).
+
 ## 📖 Fonte dos dados
 
 Os quatro livros da série [The Architecture of Open Source Applications](https://aosabook.org/en/), publicados em HTML sob a licença Creative Commons Attribution 3.0:
@@ -203,7 +235,9 @@ src/main/java/br/com/luizmatosdev/ragarquitetura/
 ├── consulta/
 │   ├── BuscadorDeTrechos       # os trechos mais próximos da pergunta, direto do banco
 │   ├── TrechoEncontrado        # trecho com a nota e a fonte
-│   └── BuscaController         # GET /api/busca
+│   ├── GeradorDeRespostas      # monta o prompt com os trechos e pede a resposta ao modelo
+│   ├── BuscaController         # GET /api/busca
+│   └── RespostaController      # GET /api/resposta
 └── inspecao/
     └── InspecionarIngestao     # roda a ingestão e mostra o resultado de cada parte
 ```
@@ -223,6 +257,7 @@ src/main/java/br/com/luizmatosdev/ragarquitetura/
 | `metadata` | `jsonb` | Livro, capítulo, autor, arquivo, URL, posição na página e o modelo que gerou o vetor |
 
 - **Busca no banco.** O `BuscadorDeTrechos` transforma a pergunta em vetor, com o prefixo de pergunta, e pede ao store os 5 trechos mais próximos. O PostgreSQL compara o vetor da pergunta com os 3.982 e devolve os mais próximos: na máquina local, a busca leva menos de 0,1 segundo, e a primeira, 1,3 segundo, enquanto o modelo de embedding carrega. O `TrechoEncontrado` tira os tipos do LangChain4j da resposta da API, que fica só com a nota, a fonte e o texto.
+- **Resposta com os trechos no prompt.** O `GeradorDeRespostas` busca os 5 trechos, numera cada um com o livro e o capítulo, e manda ao `qwen3:4b-instruct` duas mensagens: as instruções (responder em português, só com base nos trechos, citando o número) e os trechos com a pergunta. O modelo devolve o texto, e a API junta as fontes na mesma ordem dos números. Se a busca não acha nada, a resposta sai sem chamar o modelo.
 
 - **Três modelos, três papéis.** O `nomic-embed-text` transforma texto em vetor de 768 números para a busca. O reranking dá uma nota de relevância a cada trecho encontrado. O `qwen3:4b-instruct` traduz a pergunta e escreve a resposta.
 
@@ -304,6 +339,22 @@ A consulta precisava de uma porta de entrada, e a API é a do Spring que já uso
 
 É o número da avaliação (o trecho certo entre os 5 primeiros) e o que cabe no contexto do modelo de geração, com uns 300 tokens por trecho. Fica em `rag.busca.quantidade`. Quando o reranking entrar, na etapa 5, a busca passa a trazer 20 e o reranking escolhe os 5.
 
+**Prompt que prende o modelo aos trechos**
+
+As instruções vão numa mensagem de sistema: responder só com base nos trechos, citar o número de cada trecho usado e, se a resposta não estiver lá, dizer apenas "Não encontrei isso nos livros.". A frase fixa deixa a recusa fácil de reconhecer na avaliação. Na pergunta sobre Kubernetes, que não está nos livros, o modelo recusou em vez de inventar.
+
+**A regra da língua repetida no fim da mensagem**
+
+Na primeira versão, a regra "responda em português" estava só nas instruções do início, e duas das três perguntas em inglês voltaram em inglês: o modelo pequeno segue a língua da pergunta. Repetir a regra no fim da mensagem, logo depois da pergunta, resolveu as cinco perguntas do teste. Isso precisava funcionar antes da etapa 4, em que todas as perguntas chegam ao modelo traduzidas para o inglês.
+
+**Temperatura 0,2, contexto de 4.096 tokens e resposta de até 512**
+
+Temperatura baixa deixa o modelo perto do texto dos trechos e com pouca variação entre execuções, o que importa para comparar as etapas. O contexto de 4.096 tokens é o que o Ollama usa na CPU e cabe as instruções, os 5 trechos e a pergunta. O limite de 512 tokens corta respostas que se estenderiam por minutos a 7 tokens por segundo. Os três ficam em `rag.geracao.*`, e o tempo limite da chamada ao modelo é de 5 minutos.
+
+**Resposta por `GET`, como a busca**
+
+Responder não cria nem altera nada, então `GET` com a pergunta na URL descreve bem a operação, e dá para testar no navegador. O custo é que perguntas muito longas esbarram no limite de tamanho da URL, o que não acontece com perguntas de uma ou duas frases.
+
 **Reranking com um modelo pequeno dentro do Java**
 
 Reordenar os trechos com o próprio LLM exigiria uma chamada por trecho, inviável sem GPU. O reranking usa um modelo pequeno feito para isso (ms-marco-MiniLM), executado dentro da aplicação pelo LangChain4j.
@@ -328,8 +379,9 @@ O download dos modelos caiu várias vezes no meio. O serviço `ollama-modelos` t
 | Geração dos vetores | ✅ Pronto, com testes |
 | Gravação no banco | ✅ Pronto, com testes |
 | Busca (`GET /api/busca`) | ✅ Pronto, com testes |
-| Resposta | 🔨 Próxima |
-| Lista completa de perguntas da avaliação | ⏳ |
+| Resposta (`GET /api/resposta`): etapa 1 da pesquisa completa | ✅ Pronto, com testes |
+| Lista completa de perguntas da avaliação | 🔨 Próxima |
+| Etapas 2 a 5 da pesquisa | ⏳ |
 
 ## 📄 Licença
 

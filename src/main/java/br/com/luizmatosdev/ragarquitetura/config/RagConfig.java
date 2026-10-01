@@ -1,9 +1,12 @@
 package br.com.luizmatosdev.ragarquitetura.config;
 
 import br.com.luizmatosdev.ragarquitetura.consulta.BuscadorDeTrechos;
+import br.com.luizmatosdev.ragarquitetura.consulta.GeradorDeRespostas;
 import br.com.luizmatosdev.ragarquitetura.vetor.GeradorDeVetores;
 import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.ollama.OllamaEmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.pgvector.DefaultMetadataStorageConfig;
@@ -34,6 +37,29 @@ public class RagConfig {
     @Bean
     GeradorDeVetores geradorDeVetores(EmbeddingModel modeloDeEmbedding) {
         return new GeradorDeVetores(modeloDeEmbedding);
+    }
+
+    @Bean
+    ChatModel modeloDeGeracao(
+            @Value("${rag.ollama.url}") String urlOllama,
+            @Value("${rag.geracao.modelo}") String modelo,
+            @Value("${rag.geracao.temperatura}") double temperatura,
+            @Value("${rag.geracao.contexto}") int contexto,
+            @Value("${rag.geracao.maximo-de-tokens}") int maximoDeTokens) {
+        return OllamaChatModel.builder()
+                .baseUrl(urlOllama)
+                .modelName(modelo)
+                .temperature(temperatura)
+                .numCtx(contexto)
+                .numPredict(maximoDeTokens)
+                // Na CPU, ler os 5 trechos e escrever a resposta leva de dezenas de segundos a minutos
+                .timeout(Duration.ofMinutes(5))
+                .build();
+    }
+
+    @Bean
+    GeradorDeRespostas geradorDeRespostas(BuscadorDeTrechos buscadorDeTrechos, ChatModel modeloDeGeracao) {
+        return new GeradorDeRespostas(buscadorDeTrechos, modeloDeGeracao);
     }
 
     // @Lazy no parâmetro: o buscador recebe um intermediário, e o store só é montado na primeira busca
