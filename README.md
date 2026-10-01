@@ -34,6 +34,7 @@ flowchart LR
 ## 📋 Índice
 
 - [🚀 Como rodar](#-como-rodar)
+- [📚 Endpoints](#-endpoints)
 - [🔬 Pesquisa](#-pesquisa)
 - [📖 Fonte dos dados](#-fonte-dos-dados)
 - [🧩 Como o código funciona](#-como-o-código-funciona)
@@ -69,13 +70,19 @@ O Maven vem pelo wrapper. Se o JDK 25 não for o padrão da máquina, aponte o `
 
 No Windows, use `mvnw.cmd`. O `verify` compila, confere a formatação do código e roda os testes, sem Docker, e o `./mvnw spotless:apply` corrige a formatação.
 
-A ingestão lê o livro, gera os vetores e grava os trechos no banco, e a aplicação termina quando ela acaba. Cada execução refaz o índice do zero:
+A ingestão lê o livro, gera os vetores e grava os trechos no banco, em uns 15 minutos na CPU. Ela roda no perfil `ingestao`, que sobe a aplicação sem servidor web e termina no fim. Cada execução refaz o índice do zero:
 
 ```bash
-./mvnw spring-boot:run -Dspring-boot.run.arguments=--rag.ingestao.executar=true
+./mvnw spring-boot:run -Dspring-boot.run.profiles=ingestao
 ```
 
-Pela IDE, rode a `RagArquiteturaApplication` com o argumento `--rag.ingestao.executar=true`. A configuração vem de variáveis de ambiente, com padrão para o `docker-compose.yml`:
+Com o banco preenchido, a aplicação sobe a API em `http://localhost:8080`:
+
+```bash
+./mvnw spring-boot:run
+```
+
+Pela IDE, rode a `RagArquiteturaApplication`, com o perfil ativo `ingestao` para a ingestão ou sem perfil para a API. A configuração vem de variáveis de ambiente, com padrão para o `docker-compose.yml`:
 
 | Variável | Padrão |
 |---|---|
@@ -85,6 +92,37 @@ Pela IDE, rode a `RagArquiteturaApplication` com o argumento `--rag.ingestao.exe
 | `OLLAMA_URL` | `http://localhost:11434` |
 
 Para ver o resultado da ingestão até onde ela está pronta, rode a classe `InspecionarIngestao` pela IDE, com a raiz do projeto como pasta de trabalho. Ela mostra um resumo no console e grava o texto limpo de cada página em `data/texto/` e os trechos em `data/trechos/`, sem mexer no banco. Com o Ollama no ar, também vetoriza o capítulo do Asterisk e faz uma busca em memória com duas perguntas de exemplo.
+
+## 📚 Endpoints
+
+| Método | Rota | O que faz |
+|---|---|---|
+| `GET` | `/api/busca?pergunta=...` | Devolve os 5 trechos do livro mais próximos da pergunta, com a fonte de cada um |
+
+A busca mostra o que o modelo vai receber antes de existir a resposta. Pergunta vazia ou ausente volta com 400.
+
+```bash
+curl -G http://localhost:8080/api/busca --data-urlencode "pergunta=How does nginx handle many connections at the same time?"
+```
+
+```json
+{
+  "pergunta": "How does nginx handle many connections at the same time?",
+  "trechos": [
+    {
+      "nota": 0.911,
+      "livro": "The Architecture of Open Source Applications, Volume 2",
+      "capitulo": "nginx",
+      "autor": "Andrew Alexeev",
+      "url": "https://aosabook.org/en/v2/nginx.html",
+      "posicao": 8,
+      "texto": "Aimed at solving the C10K problem of 10,000 simultaneous connections, ..."
+    }
+  ]
+}
+```
+
+A `nota` vai de 0 a 1 e é calculada pelo LangChain4j como (1 + similaridade de cosseno) / 2: 1 é o mesmo sentido, e 0,5 é nenhuma relação. A `posicao` é a ordem do trecho dentro do capítulo.
 
 ## 🔬 Pesquisa
 
@@ -121,6 +159,15 @@ Antes do banco, fiz uma busca em memória só no capítulo do Asterisk (33 trech
 
 Dois sinais para as próximas etapas. O trecho 1 começa com a introdução do capítulo e só no fim chega à definição, e o vetor dele mistura os dois assuntos, que é o que a etapa 2 (trechos por seção) quer resolver. E a pergunta em português tem notas bem mais baixas que a mesma pergunta em inglês, que é o motivo da etapa 4 (tradução). É uma pergunta só, então é sinal, não resultado.
 
+Com o livro inteiro no banco, pela `/api/busca` (aqui a nota já é a do LangChain4j, de 0 a 1), as três perguntas da avaliação trouxeram os 5 trechos do capítulo certo, entre os 3.982:
+
+| Pergunta | 1º colocado | Os 5 do capítulo certo? |
+|---|---|---|
+| What is a channel in Asterisk? | 0,907, Asterisk, trecho 23 | Sim, e a definição (trecho 1) entrou em 5º |
+| How does nginx handle many connections at the same time? | 0,911, nginx, trecho 8 (o problema C10K) | Sim |
+| How does HDFS avoid losing data when a disk fails? | 0,875, HDFS, trecho 22 | Sim |
+| O que é um channel no Asterisk? | 0,851, Asterisk, trecho 3 | Sim, e a definição entrou em 3º |
+
 ## 📖 Fonte dos dados
 
 Os quatro livros da série [The Architecture of Open Source Applications](https://aosabook.org/en/), publicados em HTML sob a licença Creative Commons Attribution 3.0:
@@ -150,9 +197,13 @@ src/main/java/br/com/luizmatosdev/ragarquitetura/
 │   ├── LeitorLivro             # HTML do livro para texto limpo, com livro, capítulo, autor e URL
 │   ├── CortadorDeTrechos       # texto em trechos de até 1.200 caracteres
 │   ├── IngestaoDoLivro         # o fluxo inteiro: ler, cortar, vetorizar e gravar
-│   └── ExecutorDaIngestao      # roda a ingestão ao subir, com rag.ingestao.executar=true
+│   └── ExecutorDaIngestao      # roda a ingestão ao subir, no perfil ingestao
 ├── vetor/
 │   └── GeradorDeVetores        # trechos e pergunta em vetores de 768 números, pelo Ollama
+├── consulta/
+│   ├── BuscadorDeTrechos       # os trechos mais próximos da pergunta, direto do banco
+│   ├── TrechoEncontrado        # trecho com a nota e a fonte
+│   └── BuscaController         # GET /api/busca
 └── inspecao/
     └── InspecionarIngestao     # roda a ingestão e mostra o resultado de cada parte
 ```
@@ -170,6 +221,8 @@ src/main/java/br/com/luizmatosdev/ragarquitetura/
 | `embedding` | `vector(768)` | O vetor |
 | `text` | `text` | O texto do trecho |
 | `metadata` | `jsonb` | Livro, capítulo, autor, arquivo, URL, posição na página e o modelo que gerou o vetor |
+
+- **Busca no banco.** O `BuscadorDeTrechos` transforma a pergunta em vetor, com o prefixo de pergunta, e pede ao store os 5 trechos mais próximos. O PostgreSQL compara o vetor da pergunta com os 3.982 e devolve os mais próximos: na máquina local, a busca leva menos de 0,1 segundo, e a primeira, 1,3 segundo, enquanto o modelo de embedding carrega. O `TrechoEncontrado` tira os tipos do LangChain4j da resposta da API, que fica só com a nota, a fonte e o texto.
 
 - **Três modelos, três papéis.** O `nomic-embed-text` transforma texto em vetor de 768 números para a busca. O reranking dá uma nota de relevância a cada trecho encontrado. O `qwen3:4b-instruct` traduz a pergunta e escreve a resposta.
 
@@ -235,9 +288,21 @@ O pgvector tem índices que aceleram a busca comparando só parte dos vetores (I
 
 Cada execução apaga a tabela e grava tudo de novo, para cada etapa da pesquisa medir um índice inteiro feito do mesmo jeito. A tabela só é apagada depois que os vetores novos estão prontos: se a vetorização falhar no meio dos 15 minutos, o banco continua com a versão anterior. O custo é refazer os 15 minutos mesmo quando só uma página muda.
 
-**Ingestão como execução da aplicação, não como endpoint**
+**Ingestão como perfil da aplicação, não como endpoint**
 
-A ingestão roda quando a aplicação sobe com `rag.ingestao.executar=true`, e a aplicação termina no fim. É um processo de 15 minutos que roda raramente, e não faz sentido deixá-lo atrás de uma rota HTTP. O store do banco é `@Lazy`: sem a ingestão ligada, a aplicação sobe sem conectar no PostgreSQL, e os testes rodam sem Docker.
+A ingestão roda quando a aplicação sobe no perfil `ingestao`, que liga o `rag.ingestao.executar` e desliga o servidor web, e a aplicação termina no fim. É um processo de 15 minutos que roda raramente, e não faz sentido deixá-lo atrás de uma rota HTTP, onde a requisição ficaria esperando ou precisaria de controle de execução em segundo plano. Sem o perfil, a mesma aplicação sobe a API.
+
+**Store do banco montado só no primeiro uso**
+
+Ao ser montado, o `PgVectorEmbeddingStore` conecta no PostgreSQL e cria a tabela. Com `@Lazy`, a aplicação sobe sem tocar no banco, e o store nasce na primeira busca ou na ingestão. É isso que deixa os testes rodarem sem Docker: os do fluxo usam o store em memória do LangChain4j, que tem a mesma interface, e os da API trocam o buscador por um mock.
+
+**API REST para consultar**
+
+A consulta precisava de uma porta de entrada, e a API é a do Spring que já uso nos outros projetos: dá para testar no navegador ou com `curl`, e a resposta do modelo vira só mais uma rota. A `/api/busca` fica mesmo depois da resposta pronta, porque mostra o que a busca achou sem esperar o modelo escrever, o que ajuda a avaliar as etapas.
+
+**5 trechos por pergunta**
+
+É o número da avaliação (o trecho certo entre os 5 primeiros) e o que cabe no contexto do modelo de geração, com uns 300 tokens por trecho. Fica em `rag.busca.quantidade`. Quando o reranking entrar, na etapa 5, a busca passa a trazer 20 e o reranking escolhe os 5.
 
 **Reranking com um modelo pequeno dentro do Java**
 
@@ -262,8 +327,8 @@ O download dos modelos caiu várias vezes no meio. O serviço `ollama-modelos` t
 | Corte em trechos (etapa 1: tamanho fixo) | ✅ Pronto, com testes |
 | Geração dos vetores | ✅ Pronto, com testes |
 | Gravação no banco | ✅ Pronto, com testes |
-| Busca | 🔨 Próxima |
-| Resposta | ⏳ |
+| Busca (`GET /api/busca`) | ✅ Pronto, com testes |
+| Resposta | 🔨 Próxima |
 | Lista completa de perguntas da avaliação | ⏳ |
 
 ## 📄 Licença

@@ -1,5 +1,6 @@
 package br.com.luizmatosdev.ragarquitetura.config;
 
+import br.com.luizmatosdev.ragarquitetura.consulta.BuscadorDeTrechos;
 import br.com.luizmatosdev.ragarquitetura.vetor.GeradorDeVetores;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -33,6 +34,15 @@ public class RagConfig {
     @Bean
     GeradorDeVetores geradorDeVetores(EmbeddingModel modeloDeEmbedding) {
         return new GeradorDeVetores(modeloDeEmbedding);
+    }
+
+    // @Lazy no parâmetro: o buscador recebe um intermediário, e o store só é montado na primeira busca
+    @Bean
+    BuscadorDeTrechos buscadorDeTrechos(
+            GeradorDeVetores geradorDeVetores,
+            @Lazy EmbeddingStore<TextSegment> bancoDeTrechos,
+            @Value("${rag.busca.quantidade}") int quantidade) {
+        return new BuscadorDeTrechos(geradorDeVetores, bancoDeTrechos, quantidade);
     }
 
     // Lazy: ao ser montado, o store conecta no banco e cria a tabela, então só nasce quando alguém usa
