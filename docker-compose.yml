@@ -1,0 +1,56 @@
+# Infraestrutura do RAG: banco (PostgreSQL + pgvector) e modelos (Ollama).
+# A aplicação Java roda fora daqui e acessa os dois pelas portas expostas.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    environment:
+      # Credenciais só para desenvolvimento local
+      POSTGRES_DB: rag
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+    ports:
+      # 5433 na máquina, porque a 5432 já é do PostgreSQL instalado no Windows
+      - "5433:5432"
+    volumes:
+      - postgres-dados:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      # Não apaga downloads incompletos ao reiniciar: a próxima tentativa continua de onde parou
+      OLLAMA_NOPRUNE: "true"
+    ports:
+      - "11434:11434"
+    volumes:
+      # Os modelos baixados ficam aqui e sobrevivem a um "docker compose down"
+      - ollama-modelos:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Baixa os modelos ao subir o ambiente e termina. Modelo já baixado não é baixado de novo.
+  ollama-modelos:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      # O comando "ollama" deste container fala com o servidor do serviço ollama
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    # instruct: versão que responde direto, sem o modo de pensar (lento demais na CPU)
+    command: ["ollama pull qwen3:4b-instruct && ollama pull nomic-embed-text"]
+    # Se a conexão cair, tenta de novo (até 20 vezes)
+    restart: on-failure:20
+
+volumes:
+  postgres-dados:
+  ollama-modelos:
