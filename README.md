@@ -69,6 +69,8 @@ O Maven vem pelo wrapper. Se o JDK 25 não for o padrão da máquina, aponte o `
 
 No Windows, use `mvnw.cmd`. O `verify` compila, confere a formatação do código e roda os testes, e o `./mvnw spotless:apply` corrige a formatação.
 
+Para ver o resultado da ingestão até onde ela está pronta, rode a classe `InspecionarIngestao` pela IDE, com a raiz do projeto como pasta de trabalho. Ela mostra um resumo no console e grava o texto limpo de cada página em `data/texto/` e os trechos em `data/trechos/`, sem mexer no banco.
+
 ## 🔬 Pesquisa
 
 O sistema começa numa versão base e recebe uma técnica por vez. Cada etapa é medida contra a anterior, para mostrar quanto aquela peça contribuiu:
@@ -113,16 +115,21 @@ O script baixa 89 páginas, uns 4 MB. Os 83 capítulos e as 4 introduções entr
 ```
 scripts/baixar_aosa.py     # baixa o HTML cru dos 4 livros e grava o manifesto.json
 data/raw/                  # o livro baixado, fora do Git
+data/texto/, data/trechos/ # gerados pelo InspecionarIngestao para conferência, fora do Git
 docker-compose.yml         # PostgreSQL + pgvector, Ollama e o download dos modelos
 src/main/java/br/com/luizmatosdev/ragarquitetura/
 ├── RagArquiteturaApplication   # ponto de entrada do Spring Boot
-└── ingestao/
-    └── LeitorLivro             # HTML do livro para texto limpo, com livro, capítulo, autor e URL
+├── ingestao/
+│   ├── LeitorLivro             # HTML do livro para texto limpo, com livro, capítulo, autor e URL
+│   └── CortadorDeTrechos       # texto em trechos de até 1.200 caracteres
+└── inspecao/
+    └── InspecionarIngestao     # roda a ingestão e mostra o resultado de cada parte
 ```
 
 - **Dois fluxos separados.** A ingestão lê o livro, corta em trechos, gera os vetores e grava no banco, uma vez por versão do índice. A consulta roda a cada pergunta: traduz, busca, reordena e gera a resposta.
 - **Download separado da ingestão.** O `baixar_aosa.py` só baixa o HTML, sem limpar nem cortar. O processamento fica na ingestão em Java, e mudar a forma de cortar o texto não exige baixar tudo de novo. O `manifesto.json` registra de onde veio cada página, para a resposta citar a fonte.
 - **Texto limpo com a fonte junto.** O `LeitorLivro` transforma cada página num `Document` do LangChain4j: o texto sem a moldura do site (título, propaganda, números das notas) e os metadados que identificam de onde ele veio. Os blocos ficam separados por linha em branco, e o código dos exemplos mantém as quebras de linha. No livro inteiro são 87 páginas e 3,6 milhões de caracteres.
+- **Trechos que respeitam o texto.** O `CortadorDeTrechos` usa o divisor recursivo do LangChain4j: tenta cortar entre parágrafos, depois entre linhas, frases e palavras, e só parte um parágrafo quando ele sozinho passa do tamanho máximo. Cada trecho herda os metadados da página e ganha o `index`, a posição dele na página. O livro vira 3.982 trechos, com 941 caracteres em média.
 - **Três modelos, três papéis.** O `nomic-embed-text` transforma texto em vetor de 768 números para a busca. O reranking dá uma nota de relevância a cada trecho encontrado. O `qwen3:4b-instruct` traduz a pergunta e escreve a resposta.
 
 ## 🧠 Decisões técnicas
@@ -159,6 +166,10 @@ A alternativa era o Gemma 3 4B. Fiquei no Qwen3 porque escreve bem em português
 
 O livro fica em inglês no banco, a pergunta é traduzida para o inglês antes da busca e o modelo responde direto em português. Traduzir o livro inteiro levaria horas na CPU, gravaria os erros de tradução no banco e a citação não bateria mais com o original. Traduzir a resposta de volta custaria mais uma chamada ao modelo por pergunta, e fica como plano B se o português sair ruim. O motivo principal é a busca híbrida: a parte por palavra-chave só funciona se a pergunta e o texto estiverem na mesma língua. Por isso o modelo de embedding não precisa ser multilíngue.
 
+**Trechos de até 1.200 caracteres, com 120 de sobreposição**
+
+1.200 caracteres de texto em inglês dão uns 300 tokens. Sem GPU, o modelo de geração trabalha com 4.096 tokens de contexto, e os 5 trechos da resposta (uns 1.500 tokens) cabem com folga junto da pergunta e das instruções. Trechos maiores levariam mais assunto misturado para cada vetor; menores, perderiam o contexto da frase. A sobreposição repete as frases inteiras do fim do trecho anterior que cabem em 120 caracteres, para que uma ideia cortada no meio apareça completa em pelo menos um dos dois. Os dois números são parâmetros da etapa 1 e podem mudar quando a avaliação mostrar o efeito deles.
+
 **Reranking com um modelo pequeno dentro do Java**
 
 Reordenar os trechos com o próprio LLM exigiria uma chamada por trecho, inviável sem GPU. O reranking usa um modelo pequeno feito para isso (ms-marco-MiniLM), executado dentro da aplicação pelo LangChain4j.
@@ -179,8 +190,8 @@ O download dos modelos caiu várias vezes no meio. O serviço `ollama-modelos` t
 | Banco e modelos no Docker | ✅ Pronto e testado |
 | Projeto Spring Boot | ✅ Esqueleto |
 | Leitura do livro (HTML para texto limpo) | ✅ Pronto, com testes |
-| Corte em trechos | 🔨 Próxima |
-| Geração dos vetores | ⏳ |
+| Corte em trechos (etapa 1: tamanho fixo) | ✅ Pronto, com testes |
+| Geração dos vetores | 🔨 Próxima |
 | Gravação no banco | ⏳ |
 | Busca | ⏳ |
 | Resposta | ⏳ |
