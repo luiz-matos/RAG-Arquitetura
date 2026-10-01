@@ -69,7 +69,7 @@ O Maven vem pelo wrapper. Se o JDK 25 não for o padrão da máquina, aponte o `
 
 No Windows, use `mvnw.cmd`. O `verify` compila, confere a formatação do código e roda os testes, e o `./mvnw spotless:apply` corrige a formatação.
 
-Para ver o resultado da ingestão até onde ela está pronta, rode a classe `InspecionarIngestao` pela IDE, com a raiz do projeto como pasta de trabalho. Ela mostra um resumo no console e grava o texto limpo de cada página em `data/texto/` e os trechos em `data/trechos/`, sem mexer no banco.
+Para ver o resultado da ingestão até onde ela está pronta, rode a classe `InspecionarIngestao` pela IDE, com a raiz do projeto como pasta de trabalho. Ela mostra um resumo no console e grava o texto limpo de cada página em `data/texto/` e os trechos em `data/trechos/`, sem mexer no banco. Com o Ollama no ar, também vetoriza o capítulo do Asterisk e faz uma busca em memória com duas perguntas de exemplo.
 
 ## 🔬 Pesquisa
 
@@ -94,6 +94,17 @@ Todas as etapas fazem a mesma prova: uma lista de perguntas em que cada uma anot
 | Como o HDFS evita perder dados quando um disco falha? | `v1/hdfs` |
 
 A nota da etapa é em quantas perguntas o trecho certo apareceu entre os 5 primeiros encontrados.
+
+### 🔎 Primeiros sinais
+
+Antes do banco, fiz uma busca em memória só no capítulo do Asterisk (33 trechos), comparando o vetor da pergunta com o de cada trecho. A definição de channel está no trecho 1:
+
+| Pergunta | Nota do 1º colocado | Trecho 1 (a definição) |
+|---|---|---|
+| What is a channel in Asterisk? | 0,813 (trecho 23) | Fora dos 3 primeiros |
+| O que é um channel no Asterisk? | 0,702 (trecho 3) | 3º lugar, nota 0,688 |
+
+Dois sinais para as próximas etapas. O trecho 1 começa com a introdução do capítulo e só no fim chega à definição, e o vetor dele mistura os dois assuntos, que é o que a etapa 2 (trechos por seção) quer resolver. E a pergunta em português tem notas bem mais baixas que a mesma pergunta em inglês, que é o motivo da etapa 4 (tradução). É uma pergunta só, então é sinal, não resultado.
 
 ## 📖 Fonte dos dados
 
@@ -122,6 +133,8 @@ src/main/java/br/com/luizmatosdev/ragarquitetura/
 ├── ingestao/
 │   ├── LeitorLivro             # HTML do livro para texto limpo, com livro, capítulo, autor e URL
 │   └── CortadorDeTrechos       # texto em trechos de até 1.200 caracteres
+├── vetor/
+│   └── GeradorDeVetores        # trechos e pergunta em vetores de 768 números, pelo Ollama
 └── inspecao/
     └── InspecionarIngestao     # roda a ingestão e mostra o resultado de cada parte
 ```
@@ -130,6 +143,7 @@ src/main/java/br/com/luizmatosdev/ragarquitetura/
 - **Download separado da ingestão.** O `baixar_aosa.py` só baixa o HTML, sem limpar nem cortar. O processamento fica na ingestão em Java, e mudar a forma de cortar o texto não exige baixar tudo de novo. O `manifesto.json` registra de onde veio cada página, para a resposta citar a fonte.
 - **Texto limpo com a fonte junto.** O `LeitorLivro` transforma cada página num `Document` do LangChain4j: o texto sem a moldura do site (título, propaganda, números das notas) e os metadados que identificam de onde ele veio. Os blocos ficam separados por linha em branco, e o código dos exemplos mantém as quebras de linha. No livro inteiro são 87 páginas e 3,6 milhões de caracteres.
 - **Trechos que respeitam o texto.** O `CortadorDeTrechos` usa o divisor recursivo do LangChain4j: tenta cortar entre parágrafos, depois entre linhas, frases e palavras, e só parte um parágrafo quando ele sozinho passa do tamanho máximo. Cada trecho herda os metadados da página e ganha o `index`, a posição dele na página. O livro vira 3.982 trechos, com 941 caracteres em média.
+- **Vetores pelo Ollama.** O `GeradorDeVetores` recebe um `EmbeddingModel`, a interface do LangChain4j, e não sabe que do outro lado está o Ollama: nos testes, um modelo falso entra no lugar. Os trechos vão em lotes de 32 por chamada, e cada trecho vira um vetor de 768 números. Na CPU, são uns 3,6 trechos por segundo, então o livro inteiro leva perto de 19 minutos.
 - **Três modelos, três papéis.** O `nomic-embed-text` transforma texto em vetor de 768 números para a busca. O reranking dá uma nota de relevância a cada trecho encontrado. O `qwen3:4b-instruct` traduz a pergunta e escreve a resposta.
 
 ## 🧠 Decisões técnicas
@@ -170,6 +184,14 @@ O livro fica em inglês no banco, a pergunta é traduzida para o inglês antes d
 
 1.200 caracteres de texto em inglês dão uns 300 tokens. Sem GPU, o modelo de geração trabalha com 4.096 tokens de contexto, e os 5 trechos da resposta (uns 1.500 tokens) cabem com folga junto da pergunta e das instruções. Trechos maiores levariam mais assunto misturado para cada vetor; menores, perderiam o contexto da frase. A sobreposição repete as frases inteiras do fim do trecho anterior que cabem em 120 caracteres, para que uma ideia cortada no meio apareça completa em pelo menos um dos dois. Os dois números são parâmetros da etapa 1 e podem mudar quando a avaliação mostrar o efeito deles.
 
+**Prefixo que diz ao modelo de embedding o papel do texto**
+
+O `nomic-embed-text` foi treinado com um prefixo que indica o papel do texto: `search_document: ` no que vai ser buscado e `search_query: ` na pergunta. Sem ele, o modelo funciona, mas compara pergunta e trecho como se fossem o mesmo tipo de texto. O prefixo vai só para o modelo: o trecho guardado continua sem ele. O custo é que o prefixo é do `nomic-embed-text`, e trocar de modelo exige revisar isso junto.
+
+**Vetores em lotes de 32 trechos**
+
+Mandar os 3.982 trechos numa chamada só passaria do tempo limite e não mostraria progresso; mandar um por chamada multiplicaria o custo de ida e volta ao Ollama. Com lotes de 32, cada chamada leva poucos segundos na CPU, e o log mostra quantos já foram.
+
 **Reranking com um modelo pequeno dentro do Java**
 
 Reordenar os trechos com o próprio LLM exigiria uma chamada por trecho, inviável sem GPU. O reranking usa um modelo pequeno feito para isso (ms-marco-MiniLM), executado dentro da aplicação pelo LangChain4j.
@@ -191,8 +213,8 @@ O download dos modelos caiu várias vezes no meio. O serviço `ollama-modelos` t
 | Projeto Spring Boot | ✅ Esqueleto |
 | Leitura do livro (HTML para texto limpo) | ✅ Pronto, com testes |
 | Corte em trechos (etapa 1: tamanho fixo) | ✅ Pronto, com testes |
-| Geração dos vetores | 🔨 Próxima |
-| Gravação no banco | ⏳ |
+| Geração dos vetores | ✅ Pronto, com testes |
+| Gravação no banco | 🔨 Próxima |
 | Busca | ⏳ |
 | Resposta | ⏳ |
 | Lista completa de perguntas da avaliação | ⏳ |
