@@ -115,11 +115,14 @@ scripts/baixar_aosa.py     # baixa o HTML cru dos 4 livros e grava o manifesto.j
 data/raw/                  # o livro baixado, fora do Git
 docker-compose.yml         # PostgreSQL + pgvector, Ollama e o download dos modelos
 src/main/java/br/com/luizmatosdev/ragarquitetura/
-└── RagArquiteturaApplication   # ponto de entrada do Spring Boot
+├── RagArquiteturaApplication   # ponto de entrada do Spring Boot
+└── ingestao/
+    └── LeitorLivro             # HTML do livro para texto limpo, com livro, capítulo, autor e URL
 ```
 
 - **Dois fluxos separados.** A ingestão lê o livro, corta em trechos, gera os vetores e grava no banco, uma vez por versão do índice. A consulta roda a cada pergunta: traduz, busca, reordena e gera a resposta.
 - **Download separado da ingestão.** O `baixar_aosa.py` só baixa o HTML, sem limpar nem cortar. O processamento fica na ingestão em Java, e mudar a forma de cortar o texto não exige baixar tudo de novo. O `manifesto.json` registra de onde veio cada página, para a resposta citar a fonte.
+- **Texto limpo com a fonte junto.** O `LeitorLivro` transforma cada página num `Document` do LangChain4j: o texto sem a moldura do site (título, propaganda, números das notas) e os metadados que identificam de onde ele veio. Os blocos ficam separados por linha em branco, e o código dos exemplos mantém as quebras de linha. No livro inteiro são 87 páginas e 3,6 milhões de caracteres.
 - **Três modelos, três papéis.** O `nomic-embed-text` transforma texto em vetor de 768 números para a busca. O reranking dá uma nota de relevância a cada trecho encontrado. O `qwen3:4b-instruct` traduz a pergunta e escreve a resposta.
 
 ## 🧠 Decisões técnicas
@@ -175,8 +178,8 @@ O download dos modelos caiu várias vezes no meio. O serviço `ollama-modelos` t
 | Download do livro | ✅ Pronto |
 | Banco e modelos no Docker | ✅ Pronto e testado |
 | Projeto Spring Boot | ✅ Esqueleto |
-| Leitura do livro (HTML para texto limpo) | 🔨 Em andamento |
-| Corte em trechos | ⏳ |
+| Leitura do livro (HTML para texto limpo) | ✅ Pronto, com testes |
+| Corte em trechos | 🔨 Próxima |
 | Geração dos vetores | ⏳ |
 | Gravação no banco | ⏳ |
 | Busca | ⏳ |

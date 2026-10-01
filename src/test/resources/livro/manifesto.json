@@ -1,0 +1,20 @@
+{
+  "fonte": "https://aosabook.org/en/",
+  "licenca": "Creative Commons Attribution 3.0 Unported",
+  "paginas": [
+    {
+      "livro": "The Architecture of Open Source Applications, Volume 1",
+      "pasta": "v1",
+      "arquivo": "v1/asterisk.html",
+      "url": "https://aosabook.org/en/v1/asterisk.html",
+      "baixado_em": "2026-09-30T20:00:00+00:00"
+    },
+    {
+      "livro": "The Architecture of Open Source Applications, Volume 1",
+      "pasta": "v1",
+      "arquivo": "v1/bib1.html",
+      "url": "https://aosabook.org/en/v1/bib1.html",
+      "baixado_em": "2026-09-30T20:00:00+00:00"
+    }
+  ]
+}

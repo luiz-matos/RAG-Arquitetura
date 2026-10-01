@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<!--
+  Trecho do capítulo "Asterisk", de Russell Bryant, em The Architecture of Open Source
+  Applications, Volume 1 (https://aosabook.org/en/v1/asterisk.html).
+  Licença Creative Commons Attribution 3.0 Unported.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>The Architecture of Open Source Applications (Volume 1)Asterisk</title>
+  </head>
+  <body>
+    <div class="titlebox">
+  <h1>The Architecture of Open Source Applications (Volume 1)<br>Asterisk</h1>
+
+<p class="author">
+
+  Russell Bryant
+
+</p>
+
+</div>
+<div class="banner">
+  <p>
+    If you enjoy these books, you may also enjoy
+    <span style="display: inline-block"><a href="https://third-bit.com/sdxpy/">Software Design by Example in Python</a></span>
+    and
+    <span style="display: inline-block"><a href="https://third-bit.com/sdxjs/">Software Design by Example in JavaScript</a></span>.
+  </p>
+</div>
+
+<p>Asterisk<sup class="footnote"><a href="#footnote-1">1</a></sup> is an open source telephony
+applications platform distributed under the GPLv2. In short, it is a
+server application for making, receiving, and performing custom
+processing of phone calls.</p>
+
+<div class="sect">
+<h2>1.1. Critical Architectural Concepts</h2>
+
+<p>This section discusses some architectural concepts that are critical
+to all parts of Asterisk. These ideas are at the foundation of
+the Asterisk architecture.</p>
+
+<div class="subsect">
+<h3>1.1.1. Channels</h3>
+
+<p>A channel in Asterisk represents a connection between the Asterisk
+system and some telephony endpoint
+(<a href="#fig.asterisk.simpleCall">Figure 1.1</a>).</p>
+
+<div class="figure" id="fig.asterisk.simpleCall">
+  <img src="../../static/asterisk/singleChannel.png" alt="[A Single Call Leg, Represented by a Single Channel]" />
+  <p>Figure 1.1: A Single Call Leg, Represented by a Single Channel</p>
+</div>
+</div>
+</div>
+
+<div class="footnotes">
+<h2>Footnotes</h2>
+<ol>
+<li id="footnote-1"><code class="url">http://www.asterisk.org/</code></li>
+<li id="footnote-2">DTMF stands for
+    Dual-Tone Multi-Frequency. This is the tone that is sent in the
+    audio of a phone call when someone presses a key on their
+    telephone.</li>
+</ol>
+</div>
+  </body>
+</html>
