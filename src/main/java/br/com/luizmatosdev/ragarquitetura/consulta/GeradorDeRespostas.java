@@ -24,6 +24,7 @@ public class GeradorDeRespostas {
             trechos estejam em inglês.
             - Use só a informação dos trechos. Se eles não trazem a resposta, responda apenas: %s
             - Cite os trechos que usou pelo número entre colchetes, como [1] ou [3].
+            - Não mencione figuras do livro, como "(Figure 1.1)": quem lê a resposta não vê as figuras.
             - Mantenha em inglês os nomes de sistemas, componentes e termos técnicos.""".formatted(NAO_ENCONTREI);
 
     // Repetida no fim da mensagem: modelo pequeno segue a língua da pergunta e esquece a instrução do início

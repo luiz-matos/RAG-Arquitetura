@@ -244,7 +244,7 @@ src/main/java/br/com/luizmatosdev/ragarquitetura/
 
 - **Dois fluxos separados.** A ingestão lê o livro, corta em trechos, gera os vetores e grava no banco, uma vez por versão do índice. A consulta roda a cada pergunta: traduz, busca, reordena e gera a resposta.
 - **Download separado da ingestão.** O `baixar_aosa.py` só baixa o HTML, sem limpar nem cortar. O processamento fica na ingestão em Java, e mudar a forma de cortar o texto não exige baixar tudo de novo. O `manifesto.json` registra de onde veio cada página, para a resposta citar a fonte.
-- **Texto limpo com a fonte junto.** O `LeitorLivro` transforma cada página num `Document` do LangChain4j: o texto sem a moldura do site (título, propaganda, números das notas) e os metadados que identificam de onde ele veio. Os blocos ficam separados por linha em branco, e o código dos exemplos mantém as quebras de linha. No livro inteiro são 87 páginas e 3,6 milhões de caracteres.
+- **Texto limpo com a fonte junto.** O `LeitorLivro` transforma cada página num `Document` do LangChain4j: o texto sem a moldura do site (título, propaganda, números das notas) e sem as referências a figuras entre parênteses, como "(Figure 1.1)", e os metadados que identificam de onde ele veio. Os blocos ficam separados por linha em branco, e o código dos exemplos mantém as quebras de linha. No livro inteiro são 87 páginas e 3,6 milhões de caracteres.
 - **Trechos que respeitam o texto.** O `CortadorDeTrechos` usa o divisor recursivo do LangChain4j: tenta cortar entre parágrafos, depois entre linhas, frases e palavras, e só parte um parágrafo quando ele sozinho passa do tamanho máximo. Cada trecho herda os metadados da página e ganha o `index`, a posição dele na página. O livro vira 3.982 trechos, com 941 caracteres em média.
 - **Vetores pelo Ollama.** O `GeradorDeVetores` recebe um `EmbeddingModel`, a interface do LangChain4j, e não sabe que do outro lado está o Ollama: nos testes, um modelo falso entra no lugar. Os trechos vão em lotes de 32 por chamada, e cada trecho vira um vetor de 768 números. Na CPU, são uns 4,4 trechos por segundo: o livro inteiro levou 15 minutos.
 - **Trechos no PostgreSQL.** O `IngestaoDoLivro` junta as peças e grava pelo `PgVectorEmbeddingStore` do LangChain4j, que cria a tabela `trecho` sozinho. Com o livro inteiro, são 3.982 linhas e 21 MB:
@@ -346,6 +346,10 @@ As instruções vão numa mensagem de sistema: responder só com base nos trecho
 **A regra da língua repetida no fim da mensagem**
 
 Na primeira versão, a regra "responda em português" estava só nas instruções do início, e duas das três perguntas em inglês voltaram em inglês: o modelo pequeno segue a língua da pergunta. Repetir a regra no fim da mensagem, logo depois da pergunta, resolveu as cinco perguntas do teste. Isso precisava funcionar antes da etapa 4, em que todas as perguntas chegam ao modelo traduzidas para o inglês.
+
+**Referências a figuras tiradas na leitura do livro, não no prompt**
+
+As respostas copiavam do texto do livro referências como "(Figure 1.1)", e quem lê a resposta não tem a figura. Primeiro tentei pelo prompt, com a regra "não mencione figuras do livro": em 2 de 3 perguntas cujos trechos citavam figuras, a resposta continuou citando. Um modelo de 4B na CPU segue a regra quando ela não briga com o texto que ele tem na frente, e aqui brigava. Então o `LeitorLivro` tira esses parênteses do texto, e o modelo nem vê a referência. O padrão saiu de um levantamento das 122 ocorrências no livro: `(Figure 1.1)`, `(see Figure 10.3)`, `(See Figure 1.11.)`, `(Figure 17.7 and Figure 17.8)`, `(as shown in Figure 6.4)`. Ficaram de propósito os 5 parênteses que dizem mais que a referência, como `(requestStart in Figure 1.1)`, os blocos de código e as legendas das figuras, que descrevem o que a figura mostra. A regra do prompt continua, como reforço. O custo foi refazer a ingestão.
 
 **Temperatura 0,2, contexto de 4.096 tokens e resposta de até 512**
 

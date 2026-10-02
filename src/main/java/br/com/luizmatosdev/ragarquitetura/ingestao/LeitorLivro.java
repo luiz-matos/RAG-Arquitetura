@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.StringJoiner;
+import java.util.regex.Pattern;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Element;
 
@@ -28,6 +29,14 @@ public class LeitorLivro {
 
     // Elementos com o texto do livro; a legenda da figura é um <p> dentro dela
     private static final String BLOCOS = "h2, h3, h4, p, pre, li";
+
+    // Parênteses que só apontam para uma figura, como "(Figure 1.1)" ou "(see Figure 2.3.)": quem lê
+    // a resposta não vê a figura, e o modelo a citava mesmo instruído a não citar. Parênteses com
+    // mais informação, como "(requestStart in Figure 1.1)", e as legendas das figuras ficam.
+    private static final Pattern REFERENCIA_A_FIGURA = Pattern.compile(
+            "\\s*\\((?:(?:see|as shown in|shown in|as depicted in)\\s+)?Figures?\\s+\\d+(?:\\.\\d+)?"
+                    + "(?:\\s*(?:,|and)\\s*(?:Figure\\s+)?\\d+(?:\\.\\d+)?)*\\.?\\)",
+            Pattern.CASE_INSENSITIVE);
 
     private final Path pastaLivro;
     private final ObjectMapper json = new ObjectMapper();
@@ -78,8 +87,10 @@ public class LeitorLivro {
             if (bloco.parents().is(BLOCOS)) {
                 continue;
             }
-            // Código mantém as quebras de linha; o resto vira uma linha por bloco
-            String conteudo = bloco.is("pre") ? bloco.wholeText().strip() : bloco.text();
+            // Código mantém as quebras de linha e fica como está; o resto vira uma linha por bloco
+            String conteudo = bloco.is("pre")
+                    ? bloco.wholeText().strip()
+                    : REFERENCIA_A_FIGURA.matcher(bloco.text()).replaceAll("");
             if (!conteudo.isBlank()) {
                 texto.add(conteudo);
             }
